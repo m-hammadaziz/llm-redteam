@@ -91,7 +91,7 @@ async def run(target: str, model: str | None = None):
     """Run every test and stream each result to the browser as soon as it arrives (SSE)."""
     async def events():
         sem = asyncio.Semaphore(3)  # at most 3 requests at once (friendly to Groq's free tier)
-        async with httpx.AsyncClient(timeout=90) as client:
+        async with httpx.AsyncClient(timeout=240) as client:
             async def one(i, name, attack):
                 async with sem:
                     res = await send(client, target, model, attack)
@@ -115,5 +115,5 @@ class TryRequest(BaseModel):
 @app.post("/api/try")
 async def try_attack(req: TryRequest):
     """Send one custom message (the 'Try your own attack' box)."""
-    async with httpx.AsyncClient(timeout=90) as client:
+    async with httpx.AsyncClient(timeout=240) as client:
         return await send(client, req.target, req.model, req.message)

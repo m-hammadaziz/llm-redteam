@@ -54,6 +54,8 @@ def ask(model: str, user_message: str) -> str:
             {"role": "user", "content": user_message},
         ],
         temperature=0,
+        max_tokens=300,  # stay under Groq free-tier token limits
+        **({"reasoning_effort": "low"} if "gpt-oss" in model else {}),
     )
     return resp.choices[0].message.content or ""
 
