@@ -26,6 +26,7 @@ app = FastAPI(title="ShopBot (demo target)")
 
 class ChatRequest(BaseModel):
     message: str
+    model: str | None = None  # optional: lets the dashboard compare models (demo target only)
 
 
 class ChatResponse(BaseModel):
@@ -40,12 +41,13 @@ def health():
 
 @app.post("/chat", response_model=ChatResponse)
 def chat(req: ChatRequest):
+    model = req.model or BOT_MODEL
     resp = client.chat.completions.create(
-        model=BOT_MODEL,
+        model=model,
         messages=[
             {"role": "system", "content": SYSTEM_PROMPT},
             {"role": "user", "content": req.message},
         ],
         temperature=0,
     )
-    return ChatResponse(reply=resp.choices[0].message.content or "", model=BOT_MODEL)
+    return ChatResponse(reply=resp.choices[0].message.content or "", model=model)
