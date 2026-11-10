@@ -35,8 +35,8 @@ jobs:
   tests:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-python@v5
+      - uses: actions/checkout@v5
+      - uses: actions/setup-python@v6
         with:
           python-version: "3.12"
           cache: pip
@@ -56,8 +56,8 @@ jobs:
       GATE_DEFENCES: ${{ inputs.defences || 'prompt,output' }}
       GATE_MIN_SCORE: ${{ inputs.min_score || '90' }}
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-python@v5
+      - uses: actions/checkout@v5
+      - uses: actions/setup-python@v6
         with:
           python-version: "3.12"
           cache: pip
@@ -87,7 +87,7 @@ jobs:
 
       - name: Upload results and security report
         if: always() && steps.key.outputs.skip != 'true'
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v6
         with:
           name: redteam-results
           path: |
