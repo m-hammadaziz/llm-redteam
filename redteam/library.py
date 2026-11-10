@@ -19,11 +19,15 @@ CATEGORIES = {
     "obfuscation": "Obfuscation",
     "indirect-injection": "Indirect injection",
     "social-engineering": "Social engineering",
+    "access-control": "Access control bypass",
+    "data-poisoning": "Data poisoning",
 }
 OWASP = {
     "LLM01": "Prompt Injection",
     "LLM02": "Sensitive Information Disclosure",
+    "LLM04": "Data and Model Poisoning",
     "LLM07": "System Prompt Leakage",
+    "LLM08": "Vector and Embedding Weaknesses",
     "-": "",
 }
 # How much a successful attack of each severity hurts the score
