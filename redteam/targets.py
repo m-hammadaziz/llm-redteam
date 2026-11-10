@@ -9,9 +9,10 @@ import httpx
 import yaml
 from pydantic import BaseModel
 
-from redteam.library import ROOT, load_attacks
+from redteam.library import ROOT, Attack, load_attacks
 
 TARGETS_FILE = ROOT / "targets.yaml"
+GENERATED_DIR = ROOT / "generated"  # attacks the AI attacker invented that broke through
 
 
 class Fixture(BaseModel):
@@ -44,9 +45,33 @@ class Target(BaseModel):
     policy: str
     admin: Admin | None = None
     fixtures: list[Fixture] = []
+    # what the AI attacker should try to achieve (empty = AI attacker disabled for this target)
+    attacker_goal: str = ""
+    # which secrets count as "goal reached" for the AI attacker (default: all of them)
+    attacker_secrets: list[str] = []
 
-    def load_attacks(self):
-        return load_attacks(ROOT / self.attacks)
+    @property
+    def generated_file(self) -> Path:
+        return GENERATED_DIR / f"{self.id}.yaml"
+
+    def load_generated(self) -> list[Attack]:
+        """Attacks the AI attacker found for this target (generated/<id>.yaml)."""
+        if not self.generated_file.exists():
+            return []
+        out = []
+        for item in (yaml.safe_load(self.generated_file.read_text(encoding="utf-8")) or {}).get("attacks") or []:
+            try:
+                out.append(Attack(**{k: v for k, v in item.items() if k != "found"}))
+            except Exception:
+                continue  # skip a hand-edited entry that no longer validates
+        return out
+
+    def load_attacks(self, include_generated: bool = False):
+        attacks = load_attacks(ROOT / self.attacks)
+        if include_generated:
+            ids = {a.id for a in attacks}
+            attacks += [a for a in self.load_generated() if a.id not in ids]
+        return attacks
 
     def render_body(self, prompt: str, model: str | None) -> dict:
         """Fill "{prompt}" / "{model}" into the body template. Fields that end up empty are dropped."""
@@ -68,6 +93,8 @@ class Target(BaseModel):
         return {"id": self.id, "name": self.name, "description": self.description, "url": self.url,
                 "model_select": self.model_select, "fixtures": [f.title for f in self.fixtures], "control": self.control,
                 "expected_leak_categories": self.expected_leak_categories,
+                "attacker": bool(self.attacker_goal) and not self.control,
+                "generated": len(self.load_generated()),
                 "secrets": len(self.secrets)}
 
 

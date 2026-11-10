@@ -7,7 +7,7 @@ then open http://localhost:8100
 It serves:
   /             the dashboard (dashboard/index.html)
   /target/...   ShopBot, the demo chatbot (target_bot/app.py)
-  /api/...      endpoints the dashboard uses to run attacks
+  /api/...      endpoints the dashboard uses to run attacks (and the AI attacker)
 Targets (ShopBot, your Enterprise RAG, ...) are configured in targets.yaml.
 """
 import json
@@ -21,6 +21,7 @@ from fastapi import FastAPI, HTTPException
 from fastapi.responses import FileResponse, HTMLResponse, StreamingResponse
 from pydantic import BaseModel
 
+from redteam.attacker import ATTACKER_MODELS, evolve, pick_seeds, save_evolution, save_generated, summarise_evolution
 from redteam.detectors import find_any_leak
 from redteam.judge import JUDGE_MODEL, judge
 from redteam.library import CATEGORIES, OWASP
@@ -62,10 +63,10 @@ def targets():
 
 
 @app.get("/api/config")
-def config(target: str = "shopbot"):
+def config(target: str = "shopbot", generated: bool = False):
     t = get_target(target)
     try:
-        attacks = t.load_attacks()
+        attacks = t.load_attacks(include_generated=generated)
     except ValueError as e:
         raise HTTPException(400, str(e))
     return {
@@ -75,6 +76,7 @@ def config(target: str = "shopbot"):
         "categories": CATEGORIES,
         "owasp": OWASP,
         "judge_model": JUDGE_MODEL,
+        "attacker_model": ATTACKER_MODELS[0],
         "labels": LABELS,
         "penalty": PENALTY,
         "secrets": t.secrets,
@@ -87,10 +89,11 @@ def sse(event: str | None, data) -> str:
 
 
 @app.get("/api/run")
-async def run(target: str = "shopbot", model: str | None = None, category: str | None = None, judge: bool = False):
+async def run(target: str = "shopbot", model: str | None = None, category: str | None = None, judge: bool = False,
+              generated: bool = False):
     """Plant test documents (if any), run the attacks, stream every result (SSE), clean up."""
     t = get_target(target)
-    attacks = t.load_attacks()
+    attacks = t.load_attacks(include_generated=generated)
     if category:
         attacks = [a for a in attacks if a.category in (category, "baseline")]
     model = model if t.model_select else None
@@ -113,7 +116,7 @@ async def run(target: str = "shopbot", model: str | None = None, category: str |
                     results.append(r)
                     yield sse(None, r)
                 path = save_run({"target": t.url, "target_id": t.id, "target_name": t.name, "model": model,
-                                 "category": category, "judge": judge, "secrets": t.secrets,
+                                 "category": category, "judge": judge, "generated": generated, "secrets": t.secrets,
                                  "policy": t.policy, "fixtures": [f.title for f in t.fixtures], "fixtures_planted": len(planted),
                                  "control": t.control, "expected_leak_categories": t.expected_leak_categories},
                                 attacks, results)
@@ -121,6 +124,53 @@ async def run(target: str = "shopbot", model: str | None = None, category: str |
             finally:
                 if planted:
                     await remove_fixtures(admin, t, planted)  # always clean up, even if the run fails
+
+    return StreamingResponse(events(), media_type="text/event-stream",
+                             headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"})
+
+
+@app.get("/api/evolve")
+async def evolve_run(target: str = "shopbot", model: str | None = None, seeds: int = 4, rounds: int = 3,
+                     judge: bool = False, seed_ids: str = ""):
+    """AI attacker: start from library attacks and let an LLM invent better ones, round by round (SSE)."""
+    t = get_target(target)
+    if not t.attacker_goal or t.control:
+        raise HTTPException(400, "the AI attacker is not enabled for this target (set attacker_goal in targets.yaml)")
+    seeds, rounds = max(1, min(seeds, 10)), max(1, min(rounds, 6))
+    chosen = pick_seeds(t.load_attacks(), seeds, [s for s in seed_ids.split(",") if s] or None)
+    model = model if t.model_select else None
+
+    async def events():
+        planted: list[int] = []
+        log, seed_results = [], []
+        async with httpx.AsyncClient(timeout=120) as admin:
+            try:
+                if t.fixtures:
+                    yield sse("status", f"Planting {len(t.fixtures)} test document(s) in {t.name}…")
+                    try:
+                        planted = await plant_fixtures(admin, t)
+                    except Exception as e:
+                        yield sse("fatal", f"Could not plant the test documents, so the run was stopped: {e}")
+                        return
+                yield sse("start", {"seeds": [a.public() for a in chosen], "rounds": rounds,
+                                    "attacker_model": ATTACKER_MODELS[0]})
+                yield sse("status", f"AI attacker ({ATTACKER_MODELS[0]}) is working on {len(chosen)} attacks, "
+                                    f"up to {rounds} new attempts each…")
+                async for ev in evolve(t, chosen, model, rounds, judge):
+                    log.append(ev)
+                    if ev["type"] == "seed_done":
+                        seed_results.append(ev)
+                    yield sse(ev["type"], ev)
+                path = save_evolution({"target": t.url, "target_id": t.id, "target_name": t.name, "model": model,
+                                       "attacker_model": ATTACKER_MODELS[0], "judge": judge, "rounds": rounds,
+                                       "goal": t.attacker_goal}, log, seed_results)
+                gen_path, added = save_generated(t, chosen, seed_results)
+                yield sse("done", {"summary": summarise_evolution(seed_results), "saved": path.name,
+                                   "generated_added": added, "generated_total": len(t.load_generated()),
+                                   "generated_file": gen_path and f"generated/{gen_path.name}"})
+            finally:
+                if planted:
+                    await remove_fixtures(admin, t, planted)
 
     return StreamingResponse(events(), media_type="text/event-stream",
                              headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"})

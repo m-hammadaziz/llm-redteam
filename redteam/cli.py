@@ -6,6 +6,8 @@
     python -m redteam.cli --category obfuscation            # only one category
     python -m redteam.cli --judge                           # also grade every reply with an AI judge
     python -m redteam.cli --report                          # also write an HTML security report
+    python -m redteam.cli --evolve --model openai/gpt-oss-20b  # AI attacker invents new attacks
+    python -m redteam.cli --generated                       # also re-run attacks the AI found earlier
 
 The red-team server (uvicorn app:app --port 8100) must be running to attack ShopBot;
 the Enterprise RAG (port 8000) must be running to attack it.
@@ -19,6 +21,7 @@ import os
 import httpx
 from dotenv import load_dotenv
 
+from redteam.attacker import ATTACKER_MODELS, evolve, pick_seeds, save_evolution, save_generated, summarise_evolution
 from redteam.library import CATEGORIES, OWASP
 from redteam.runner import LABELS, run_attacks, save_run, summarise
 from redteam.targets import load_targets, plant_fixtures, remove_fixtures
@@ -76,6 +79,48 @@ async def attack_one(target, attacks, model, use_judge, make_report=False):
     return model or target.id, s
 
 
+STATUS = {"already_leaked": "leaked already (no AI needed)", "broken": "BROKEN by the AI attacker",
+          "partial": "partial leak only", "held": "held - every AI attempt blocked"}
+
+
+async def evolve_one(target, model, seeds, rounds, use_judge):
+    chosen = pick_seeds(target.load_attacks(), seeds)
+    print(f"\n=== AI attacker ({ATTACKER_MODELS[0]}) vs {target.name}{f' · {model}' if model else ''}"
+          f"  -  {len(chosen)} seed attacks, up to {rounds} rounds each")
+    names = {a.id: a.name for a in chosen}
+    planted, log, seed_results = [], [], []
+    async with httpx.AsyncClient(timeout=120) as admin:
+        try:
+            if target.fixtures:
+                try:
+                    planted = await plant_fixtures(admin, target)
+                except Exception as e:
+                    raise SystemExit(f"  ✗ Could not plant the test documents, run stopped: {e}")
+            async for ev in evolve(target, chosen, model, rounds, use_judge):
+                log.append(ev)
+                if ev["type"] == "attempt":
+                    tag = "seed" if ev["round"] == 0 else f"AI {ev['round']}"
+                    print(f"  {names[ev['seed']][:26]:<26} {tag:<5} [{LABELS.get(ev['outcome'], ev['outcome']):^12}] "
+                          f"{ev['strategy'][:18]:<18} {ev['prompt'][:70]!r}")
+                elif ev["type"] == "attacker_error":
+                    print(f"  {names[ev['seed']][:26]:<26} ! attacker error: {ev['error'][:90]}")
+                else:
+                    seed_results.append(ev)
+                    print(f"  → {names[ev['seed']]}: {STATUS[ev['status']]}"
+                          + (f" in round {ev['winning_round']}" if ev["status"] == "broken" else ""))
+        finally:
+            if planted:
+                await remove_fixtures(admin, target, planted)
+    s = summarise_evolution(seed_results)
+    path = save_evolution({"target": target.url, "target_id": target.id, "target_name": target.name, "model": model,
+                           "attacker_model": ATTACKER_MODELS[0], "judge": use_judge, "rounds": rounds,
+                           "goal": target.attacker_goal}, log, seed_results)
+    gen, added = save_generated(target, chosen, seed_results)
+    print(f"\n  Library attacks the bot blocked: {s['seeds'] - s['already_leaked']}  ·  broken by the AI: {s['broken_by_ai']}"
+          f"  ·  AI success rate: {s['ai_success_rate']}%  ·  avg rounds to break: {s['avg_rounds_to_break']}")
+    print(f"  Saved: results/{path.name}" + (f"  ·  {added} new attack(s) added to generated/{gen.name}" if added else ""))
+
+
 def main() -> None:
     targets = load_targets()
     p = argparse.ArgumentParser(description="Run an attack library against a chatbot.")
@@ -84,10 +129,20 @@ def main() -> None:
     p.add_argument("--category", help="run only this category")
     p.add_argument("--judge", action="store_true", help="grade every reply with an AI judge (JUDGE_MODEL)")
     p.add_argument("--report", action="store_true", help="write an HTML security report to reports/ after each run")
+    p.add_argument("--generated", action="store_true", help="also run attacks the AI attacker found earlier (generated/)")
+    p.add_argument("--evolve", action="store_true", help="AI attacker: let an LLM invent new attacks from the library")
+    p.add_argument("--seeds", type=int, default=4, help="--evolve: how many library attacks to start from")
+    p.add_argument("--rounds", type=int, default=3, help="--evolve: max new AI attempts per seed")
     args = p.parse_args()
 
     target = targets[args.target]
-    attacks = target.load_attacks()
+    if args.evolve:
+        if not target.attacker_goal or target.control:
+            raise SystemExit(f"The AI attacker is not enabled for {target.id} (set attacker_goal in targets.yaml)")
+        model = (args.model or os.getenv("BOT_MODEL")) if target.model_select else None
+        asyncio.run(evolve_one(target, model, args.seeds, args.rounds, args.judge))
+        return
+    attacks = target.load_attacks(include_generated=args.generated)
     if args.category:
         attacks = [a for a in attacks if a.category in (args.category, "baseline")]
     if target.model_select:

@@ -26,7 +26,7 @@ h1{font-size:20px;margin:0;letter-spacing:.2px} h1 small{display:block;font-size
 .spacer{flex:1}
 .pill{font-size:12px;padding:4px 10px;border-radius:99px;background:var(--panel);border:1px solid var(--line);color:var(--ink2)}
 /* control bar */
-.controls{display:grid;grid-template-columns:1fr 190px 180px auto auto auto;gap:10px;background:var(--panel);
+.controls{display:grid;grid-template-columns:1fr 190px 180px auto auto auto auto;gap:10px;background:var(--panel);
   border:1px solid var(--line);border-radius:var(--r);padding:12px;margin-bottom:18px}
 .field label{display:block;font-size:11px;letter-spacing:.08em;text-transform:uppercase;color:var(--muted);margin:0 0 4px 2px}
 .field input,.field select{width:100%;background:var(--bg2);border:1px solid var(--line);border-radius:10px;padding:10px 12px;outline:none}
@@ -133,6 +133,38 @@ textarea:focus{border-color:var(--blue)}
 .toast{position:fixed;bottom:20px;left:50%;transform:translateX(-50%);background:var(--panel2);border:1px solid var(--line);
   padding:10px 16px;border-radius:10px;font-size:13px;opacity:0;transition:opacity .3s;pointer-events:none}
 .toast.on{opacity:1}
+/* AI attacker */
+.btn.ai{background:linear-gradient(135deg,var(--violet),var(--blue));color:#fff;box-shadow:0 6px 20px rgba(163,123,255,.28)}
+.evo{display:none;margin-bottom:18px;border-color:rgba(163,123,255,.4);background:linear-gradient(180deg,rgba(163,123,255,.07),transparent 140px),var(--panel)}
+.evo.on{display:block}
+.evo .head{display:flex;gap:12px;align-items:flex-start;flex-wrap:wrap}
+.evo .head p{margin:2px 0 0;color:var(--ink2);font-size:13px;max-width:720px}
+.evo .opts{display:flex;gap:10px;align-items:end;margin-left:auto;flex-wrap:wrap}
+.evo .opts .field select{width:auto;min-width:90px}
+.estats{display:grid;grid-template-columns:repeat(5,1fr);gap:10px;margin:14px 0}
+.estats div{background:var(--bg2);border:1px solid var(--line);border-radius:10px;padding:9px 12px}
+.estats b{display:block;font-size:22px}.estats span{font-size:11.5px;color:var(--muted)}
+.seeds{display:grid;gap:10px}
+.seed{background:var(--bg2);border:1px solid var(--line);border-radius:12px;padding:12px}
+.seed.broken{border-color:rgba(255,77,94,.55);box-shadow:0 0 0 1px rgba(255,77,94,.12)}
+.seed.held{border-color:rgba(46,211,154,.35)}
+.seed .top{display:flex;gap:8px;align-items:center;flex-wrap:wrap}
+.seed .name{font-weight:650}
+.steps{display:flex;gap:6px;flex-wrap:wrap;margin-top:10px;align-items:center}
+.step{font-size:12px;border-radius:8px;padding:5px 10px;border:1px solid var(--line);background:var(--panel);cursor:pointer;color:var(--ink2)}
+.step b{font-weight:750;margin-right:4px}
+.step.leaked{background:var(--red-soft);border-color:rgba(255,77,94,.5);color:#ff8994}
+.step.safe{background:var(--green-soft);border-color:rgba(46,211,154,.3);color:var(--green)}
+.step.partial{background:rgba(255,140,80,.13);border-color:rgba(255,140,80,.4);color:#ff9d6b}
+.step.offp{background:var(--amber-soft);border-color:rgba(255,181,71,.35);color:var(--amber)}
+.step.error{color:var(--amber)} .step.sel{outline:2px solid var(--violet);outline-offset:1px}
+.steps .arrow{color:var(--muted);font-size:12px}
+.stepd{margin-top:10px;display:none}
+.stepd.on{display:grid;grid-template-columns:1fr 1fr;gap:12px}
+.stepd .why{grid-column:1/-1;font-size:12.5px;color:var(--violet)}
+.gentoggle{display:inline-flex;gap:6px;align-items:center;cursor:pointer;color:var(--violet)}
+.gentoggle input{accent-color:var(--violet)}
+@media (max-width:1050px){.estats{grid-template-columns:1fr 1fr}.stepd.on{grid-template-columns:1fr}}
 @media (max-width:1050px){.main{grid-template-columns:1fr}.side{position:static}.score{grid-template-columns:1fr 1fr}.gauge{grid-column:1/-1}}
 @media (max-width:640px){.controls{grid-template-columns:1fr}.btn{width:100%}}
 </style>
@@ -154,6 +186,7 @@ textarea:focus{border-color:var(--blue)}
     <div class="field"><label>AI judge</label><label class="switch" title="A second model grades every reply and catches partial leaks"><input type="checkbox" id="useJudge"> <span id="judgeName">judge</span></label></div>
     <button class="btn primary" id="run">▶ Run attack</button>
     <button class="btn ghost" id="runAll" title="Run the full attack against every model and compare">⇄ Compare all models</button>
+    <button class="btn ai" id="evoOpen" title="An AI invents new attacks and learns from the chatbot's replies">🤖 AI attacker</button>
   </div>
 
   <div class="tinfo" id="tinfo"></div>
@@ -173,6 +206,28 @@ textarea:focus{border-color:var(--blue)}
   </div>
   <div class="progress"><i id="prog"></i></div>
   <div class="status" id="status"></div>
+
+  <div class="card evo" id="evo">
+    <div class="head">
+      <div><div class="sectionh" style="margin:0"><h2>🤖 AI attacker</h2><span class="pill" id="evoModel">attacker</span></div>
+        <p>A second AI starts from attacks in the library. Every time the chatbot blocks one, the AI reads the refusal and
+           <b>invents a different, smarter attack</b>, for up to N rounds. Attacks that break through are saved and can be re-run later.</p></div>
+      <div class="opts">
+        <div class="field"><label>Seed attacks</label><select id="evoSeeds"><option>2</option><option>3</option><option selected>4</option><option>6</option><option>8</option></select></div>
+        <div class="field"><label>Max rounds</label><select id="evoRounds"><option>1</option><option>2</option><option selected>3</option><option>5</option></select></div>
+        <button class="btn ai" id="evoStart">▶ Start AI attack</button>
+        <button class="btn ghost" id="evoStop" style="display:none">■ Stop</button>
+      </div>
+    </div>
+    <div class="estats">
+      <div><b id="eSeeds">0</b><span>seed attacks</span></div>
+      <div><b id="eBlocked" style="color:var(--green)">0</b><span>blocked by the bot at first</span></div>
+      <div><b id="eBroken" style="color:var(--red)">0</b><span>then broken by the AI</span></div>
+      <div><b id="eRate">—</b><span>AI success rate</span></div>
+      <div><b id="eAvg">—</b><span>avg rounds to break</span></div>
+    </div>
+    <div class="seeds" id="evoSeedsBox"><div class="hint">Pick how many library attacks to start from and press <b>Start AI attack</b>. Cost: up to seeds × (rounds + 1) chatbot requests.</div></div>
+  </div>
 
   <div class="main">
     <section>
@@ -272,7 +327,13 @@ async function loadTarget(id){
     Object.entries(CFG.categories).filter(([k]) => used.has(k)).map(([k,v]) => `<option value="${k}">${esc(v)}</option>`).join("");
   const t = CFG.target;
   $("#tinfo").innerHTML = (t.control ? `<span class="sev low">control run - ${esc((t.expected_leak_categories||[]).join(", ") || "some")} leaks allowed</span>` : "") + `<span>${esc(t.description)}</span><code>${esc(t.url)}</code>` +
-    (t.fixtures.length ? `<span title="Planted before each run and deleted afterwards">🧪 test documents: ${t.fixtures.map(esc).join(", ")}</span>` : "");
+    (t.fixtures.length ? `<span title="Planted before each run and deleted afterwards">🧪 test documents: ${t.fixtures.map(esc).join(", ")}</span>` : "") +
+    (t.generated ? `<label class="gentoggle" title="Attacks the AI attacker found earlier (generated/${esc(t.id)}.yaml)"><input type="checkbox" id="useGen"> include ${t.generated} AI-found attack${t.generated>1?"s":""}</label>` : "");
+  const ug = $("#useGen"); if (ug) ug.onchange = async () => { await reloadLibrary(); };
+  $("#evoOpen").disabled = !t.attacker; $("#evoOpen").title = t.attacker ? "An AI invents new attacks and learns from the chatbot's replies"
+    : (t.control ? "Not used on a control run" : "Set attacker_goal for this target in targets.yaml");
+  $("#evoModel").textContent = CFG.attacker_model || "attacker";
+  if (!t.attacker) $("#evo").classList.remove("on");
   $("#status").textContent = ""; $("#repLink").style.display = "none";
   cmpRows = {}; $("#cmp").innerHTML = `<div class="hint">${hasModels ? "Click <b>Compare all models</b> to attack every model and rank them." : "Model comparison is only available for ShopBot."}</div>`;
   $("#judgeBox").innerHTML = `<div class="hint">Switch on <b>AI judge</b> and run: a second model grades each reply and catches partial leaks the detector misses.</div>`;
@@ -319,7 +380,8 @@ function resetCards(){
 }
 
 function setRunning(r){
-  running = r; ["#run","#tryBtn","#category","#useJudge","#targetSel"].forEach(s => $(s).disabled = r);
+  running = r; ["#run","#tryBtn","#category","#useJudge","#targetSel","#evoStart","#evoSeeds","#evoRounds"].forEach(s => $(s).disabled = r);
+  $("#evoOpen").disabled = r || !(CFG && CFG.target.attacker);
   const hasModels = CFG && CFG.models.length > 0; $("#model").disabled = r || !hasModels; $("#runAll").disabled = r || !hasModels;
 }
 
@@ -420,15 +482,17 @@ function renderJudge(){
 
 async function reloadLibrary(){
   // pick up edits to the attack library without restarting the server
-  const r = await fetch(`/api/config?target=${encodeURIComponent(CFG.target.id)}`);
+  const r = await fetch(`/api/config?target=${encodeURIComponent(CFG.target.id)}&generated=${useGenerated()}`);
   if (r.ok){ const c = await r.json(); CFG.categories = c.categories; CFG.owasp = c.owasp; setTests(c.tests); }
 }
+
+function useGenerated(){ const g = $("#useGen"); return !!(g && g.checked); }
 
 function runOnce(model){
   return new Promise(resolve => {
     resetCards(); markRunning(); $("#repLink").style.display = "none";
     if ($("#useJudge").checked) $("#judgeBox").innerHTML = `<div class="hint">Grading replies…</div>`;
-    const url = `/api/run?target=${encodeURIComponent(CFG.target.id)}&model=${encodeURIComponent(model || "")}&category=${encodeURIComponent($("#category").value)}&judge=${$("#useJudge").checked}`;
+    const url = `/api/run?target=${encodeURIComponent(CFG.target.id)}&model=${encodeURIComponent(model || "")}&category=${encodeURIComponent($("#category").value)}&judge=${$("#useJudge").checked}&generated=${useGenerated()}`;
     const es = new EventSource(url);
     es.onmessage = e => applyResult(JSON.parse(e.data));
     es.addEventListener("status", e => { $("#status").style.color = ""; $("#status").textContent = JSON.parse(e.data); });
@@ -504,6 +568,91 @@ $("#tryBtn").onclick = async () => {
   $("#tryBtn").disabled = false;
 };
 $("#tryMsg").addEventListener("keydown", e => { if (e.key === "Enter" && (e.ctrlKey || e.metaKey)) $("#tryBtn").click(); });
+
+/* ───────── AI attacker ───────── */
+const STATUS_BADGE = {already_leaked:["leaked","LEAKED AT ONCE"], broken:["leaked","BROKEN BY AI"],
+                      partial:["partial","PARTIAL ONLY"], held:["safe","HELD"]};
+let EVO = {attempts:{}, seeds:{}, names:{}, es:null};
+
+$("#evoOpen").onclick = () => { $("#evo").classList.toggle("on"); if ($("#evo").classList.contains("on")) $("#evo").scrollIntoView({behavior:"smooth", block:"start"}); };
+
+function evoStats(){
+  const res = Object.values(EVO.seeds), n = Object.keys(EVO.names).length;
+  const blocked = res.filter(r => r.status !== "already_leaked"), broken = res.filter(r => r.status === "broken");
+  $("#eSeeds").textContent = n; $("#eBlocked").textContent = blocked.length; $("#eBroken").textContent = broken.length;
+  $("#eRate").textContent = blocked.length ? Math.round(100 * broken.length / blocked.length) + "%" : "—";
+  $("#eRate").style.color = broken.length ? "var(--red)" : blocked.length ? "var(--green)" : "";
+  $("#eAvg").textContent = broken.length ? (broken.reduce((a, r) => a + r.winning_round, 0) / broken.length).toFixed(1) : "—";
+}
+
+function showStep(seed, round){
+  const a = (EVO.attempts[seed] || []).find(x => x.round === round); if (!a) return;
+  document.querySelectorAll(`#ss-${seed} .step`).forEach(b => b.classList.toggle("sel", +b.dataset.r === round));
+  const d = $(`#sd-${seed}`); d.className = "stepd on";
+  const judgeLine = a.judge_reason ? `<div class="judge" style="display:block">⚖️ <b>Judge: ${esc((a.judge_verdict||"").replace("_"," "))}</b> · ${esc(a.judge_reason)}</div>` : "";
+  d.innerHTML = `${a.round ? `<div class="why">🤖 <b>${esc(a.strategy)}</b>: ${esc(a.why)}</div>` : `<div class="why">📚 Original attack from the library</div>`}
+    <div><div class="lbl" style="margin-top:0">Attack</div><div class="prompt" dir="auto" style="max-height:180px">${esc(a.prompt)}</div></div>
+    <div><div class="lbl" style="margin-top:0">Chatbot reply</div><div class="reply" dir="auto" style="max-height:180px">${a.error ? esc(a.error) : highlight(a.reply) || "<i>(empty reply)</i>"}</div>
+      ${a.leak_type && LEAK_HOW[a.leak_type] ? `<div class="leakhow">🔓 secret leaked ${LEAK_HOW[a.leak_type]}</div>` : ""}${judgeLine}</div>`;
+}
+
+function addAttempt(a){
+  (EVO.attempts[a.seed] = EVO.attempts[a.seed] || []).push(a);
+  const [cls, label] = OUT[a.outcome] || OUT.error;
+  const box = $(`#ss-${a.seed}`); box.querySelector(".dots")?.parentElement.remove();
+  box.insertAdjacentHTML("beforeend", `${a.round ? '<span class="arrow">→</span>' : ""}<button class="step ${cls}" data-r="${a.round}" title="${esc(a.strategy)}">
+     <b>${a.round ? "AI " + a.round : "Library"}</b>${a.round ? esc(a.strategy) + " · " : ""}${label}</button>`);
+  if (a.outcome !== "full_leak") box.insertAdjacentHTML("beforeend", `<span class="arrow">→ <span class="dots"><i></i><i></i><i></i></span></span>`);
+  box.querySelectorAll(".step").forEach(b => b.onclick = () => showStep(a.seed, +b.dataset.r));
+  showStep(a.seed, a.round);
+}
+
+function seedDone(r){
+  EVO.seeds[r.seed] = r;
+  $(`#ss-${r.seed}`).querySelector(".dots")?.closest(".arrow")?.remove();
+  const [cls, label] = STATUS_BADGE[r.status]; const b = $(`#sb-${r.seed}`);
+  b.className = `badge ${cls}`; b.textContent = r.status === "broken" ? `${label} · ROUND ${r.winning_round}` : label;
+  $(`#se-${r.seed}`).className = `seed ${r.status === "broken" || r.status === "already_leaked" ? "broken" : r.status === "held" ? "held" : ""}`;
+  evoStats();
+}
+
+function evoFinish(){ if (EVO.es){ EVO.es.close(); EVO.es = null; } $("#evoStop").style.display = "none"; setRunning(false); }
+
+$("#evoStart").onclick = () => {
+  if (running) return; setRunning(true); $("#evoStop").style.display = "";
+  EVO = {attempts:{}, seeds:{}, names:{}, es:null}; evoStats();
+  $("#evoSeedsBox").innerHTML = `<div class="hint">Starting…</div>`;
+  const url = `/api/evolve?target=${encodeURIComponent(CFG.target.id)}&model=${encodeURIComponent($("#model").value || "")}` +
+              `&seeds=${$("#evoSeeds").value}&rounds=${$("#evoRounds").value}&judge=${$("#useJudge").checked}`;
+  const es = EVO.es = new EventSource(url);
+  es.addEventListener("status", e => { $("#status").style.color = ""; $("#status").textContent = JSON.parse(e.data); });
+  es.addEventListener("start", e => {
+    const d = JSON.parse(e.data);
+    d.seeds.forEach(t => EVO.names[t.id] = t.name);
+    $("#evoSeedsBox").innerHTML = d.seeds.map(t => `<div class="seed" id="se-${t.id}">
+      <div class="top"><span class="name">${esc(t.name)}</span><span class="sev ${t.severity}">${t.severity}</span><span class="tech">${esc(t.category_label)}</span>
+        ${t.owasp !== "-" ? `<span class="owasp">OWASP ${t.owasp}</span>` : ""}<span class="badge run" id="sb-${t.id}"><span class="dots"><i></i><i></i><i></i></span></span></div>
+      <div class="steps" id="ss-${t.id}"><span class="arrow"><span class="dots"><i></i><i></i><i></i></span></span></div>
+      <div class="stepd" id="sd-${t.id}"></div></div>`).join("");
+    evoStats();
+  });
+  es.addEventListener("attempt", e => addAttempt(JSON.parse(e.data)));
+  es.addEventListener("attacker_error", e => { const d = JSON.parse(e.data);
+    $(`#ss-${d.seed}`).insertAdjacentHTML("beforeend", `<span class="step error" title="${esc(d.error)}">⚠ attacker error</span>`); });
+  es.addEventListener("seed_done", e => seedDone(JSON.parse(e.data)));
+  es.addEventListener("fatal", e => { $("#status").style.color = "var(--red)"; $("#status").textContent = "✗ " + JSON.parse(e.data);
+    $("#evoSeedsBox").innerHTML = `<div class="hint">Run stopped.</div>`; evoFinish(); });
+  es.addEventListener("done", async e => {
+    const d = JSON.parse(e.data), s = d.summary; evoFinish();
+    if (d.generated_added){ const keep = useGenerated(); await loadTarget(CFG.target.id); if (keep && $("#useGen")){ $("#useGen").checked = true; await reloadLibrary(); } $("#evo").classList.add("on"); }
+    $("#status").style.color = "";
+    $("#status").textContent = `AI attacker finished · saved results/${d.saved}` +
+      (d.generated_added ? ` · ${d.generated_added} new attack(s) added to ${d.generated_file} - tick "include AI-found attacks" to re-run them` : "");
+    toast(s.broken_by_ai ? `The AI broke ${s.broken_by_ai} attack(s) the bot had blocked` : "The bot held against every AI attempt");
+  });
+  es.onerror = () => { if (!EVO.es) return; toast("Connection lost - is the server still running?"); evoFinish(); };
+};
+$("#evoStop").onclick = () => { evoFinish(); $("#status").textContent = "AI attacker stopped."; toast("Stopped"); };
 
 init();
 </script>
