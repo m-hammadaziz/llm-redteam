@@ -25,7 +25,8 @@ LABELS = {"full_leak": "Leaked", "partial_leak": "Partial leak", "off_policy": "
           "expected_leak": "Allowed"}
 
 
-async def send(client: httpx.AsyncClient, target: Target, model: str | None, message: str) -> dict:
+async def send(client: httpx.AsyncClient, target: Target, model: str | None, message: str,
+               defences: list[str] | None = None) -> dict:
     """Send one message to the target, the way its API expects (see targets.yaml).
 
     Server errors (5xx) and dropped connections are retried twice with a pause - they are
@@ -34,14 +35,22 @@ async def send(client: httpx.AsyncClient, target: Target, model: str | None, mes
     error = None
     for attempt, pause in enumerate((5, 15, None)):
         try:
-            r = await client.post(target.url, json=target.render_body(message, model), headers=target.headers)
+            r = await client.post(target.url, json=target.render_body(message, model, defences), headers=target.headers)
             if r.status_code >= 500 and pause is not None:
                 raise httpx.TransportError(f"server error {r.status_code}")
-            r.raise_for_status()
-            return {"reply": target.extract_reply(r.json()), "error": None,
-                    "ms": round((time.perf_counter() - t0) * 1000), "attempts": attempt + 1}
+            if r.status_code >= 400:  # show the target's own error message (e.g. Groq daily limit)
+                detail = r.text[:250]
+                try:
+                    detail = str(r.json().get("detail", detail))[:250]
+                except Exception:
+                    pass
+                raise httpx.HTTPStatusError(f"HTTP {r.status_code}: {detail}", request=r.request, response=r)
+            data = r.json()
+            extra = {k: data.get(k) for k in ("blocked_by", "defence_error")} if isinstance(data, dict) else {}
+            return {"reply": target.extract_reply(data), "error": None,
+                    "ms": round((time.perf_counter() - t0) * 1000), "attempts": attempt + 1, **extra}
         except (httpx.TransportError, httpx.HTTPStatusError) as e:
-            error = f"{type(e).__name__}: {e}"[:300]
+            error = (str(e) if isinstance(e, httpx.HTTPStatusError) else f"{type(e).__name__}: {e}")[:300]
             retryable = isinstance(e, httpx.TransportError)
             if not retryable or pause is None:
                 break
@@ -72,14 +81,15 @@ def decide(attack: Attack, res: dict, leak_type: str | None, verdict: dict | Non
 
 
 async def run_attacks(attacks: list[Attack], target: Target, model: str | None = None,
-                      use_judge: bool = False, timeout: float = 240) -> AsyncIterator[dict]:
+                      use_judge: bool = False, timeout: float = 240,
+                      defences: list[str] | None = None) -> AsyncIterator[dict]:
     """Yield one result per attack, in the order they finish."""
     sem = asyncio.Semaphore(target.concurrency)
     judge_sem = asyncio.Semaphore(2)
     async with httpx.AsyncClient(timeout=timeout) as client:
         async def one(a: Attack) -> dict:
             async with sem:
-                res = await send(client, target, model, a.prompt)
+                res = await send(client, target, model, a.prompt, defences)
             leak_type, secret = find_any_leak(res["reply"], target.secrets) if not res["error"] else (None, None)
             verdict = None
             if use_judge and not res["error"]:
@@ -93,7 +103,8 @@ async def run_attacks(attacks: list[Attack], target: Target, model: str | None =
                     "judge_verdict": verdict and verdict["verdict"],
                     "judge_reason": verdict and verdict["reason"],
                     "judge_error": verdict and verdict["error"],
-                    "judge_ms": verdict and verdict["ms"]}
+                    "judge_ms": verdict and verdict["ms"],
+                    "judge_model": verdict and verdict.get("model")}
 
         for fut in asyncio.as_completed([asyncio.create_task(one(a)) for a in attacks]):
             yield await fut
@@ -131,7 +142,7 @@ def summarise(attacks: list[Attack], results: list[dict]) -> dict:
         "over_refusal": any(r["outcome"] == "over_refusal" for r in baseline),
         "score": round(100 * (1 - lost_w / total_w)) if total_w else None,
         "judge": {
-            "model": JUDGE_MODEL if judged else None,
+            "model": (", ".join(sorted({r["judge_model"] for r in judged if r.get("judge_model")})) or JUDGE_MODEL) if judged else None,
             "judged": len(judged),
             # How often the judge agreed with the exact detector on real leaks = how far we can trust it
             "agreed_with_detector": f"{sum(r['judge_verdict'] == 'full_leak' for r in det_hits)}/{len(det_hits)}",
@@ -149,7 +160,7 @@ def save_run(meta: dict, attacks: list[Attack], results: list[dict]) -> Path:
     """Write the whole run to results/run-<timestamp>.json and return the path."""
     RESULTS_DIR.mkdir(exist_ok=True)
     by_id = {a.id: a for a in attacks}
-    label = meta.get("model") or meta.get("target_id") or "default"
+    label = (meta.get("model") or meta.get("target_id") or "default") + "".join(f"+{d}" for d in meta.get("defences") or [])
     path = RESULTS_DIR / f"run-{datetime.now():%Y%m%d-%H%M%S}-{label.replace('/', '_')}.json"
     path.write_text(json.dumps({
         **meta,

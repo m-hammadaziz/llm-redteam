@@ -8,6 +8,8 @@
     python -m redteam.cli --report                          # also write an HTML security report
     python -m redteam.cli --evolve --model openai/gpt-oss-20b  # AI attacker invents new attacks
     python -m redteam.cli --generated                       # also re-run attacks the AI found earlier
+    python -m redteam.cli --model allam-2-7b --defences guard,output   # ShopBot with defences on
+    python -m redteam.cli --model allam-2-7b --compare-defences        # before/after for every defence
 
 The red-team server (uvicorn app:app --port 8100) must be running to attack ShopBot;
 the Enterprise RAG (port 8000) must be running to attack it.
@@ -29,8 +31,9 @@ from redteam.targets import load_targets, plant_fixtures, remove_fixtures
 load_dotenv()
 
 
-async def attack_one(target, attacks, model, use_judge, make_report=False):
-    print(f"\n=== {target.name}{f' · {model}' if model else ''} → {target.url}")
+async def attack_one(target, attacks, model, use_judge, make_report=False, defences=None):
+    defences = defences or []
+    print(f"\n=== {target.name}{f' · {model}' if model else ''}{f' · defences: {chr(43).join(defences)}' if defences else ''} → {target.url}")
     planted = []
     async with httpx.AsyncClient(timeout=120) as admin:
         try:
@@ -41,11 +44,12 @@ async def attack_one(target, attacks, model, use_judge, make_report=False):
                     raise SystemExit(f"  ✗ Could not plant the test documents, run stopped: {e}")
                 print(f"  planted {len(planted)} test document(s)")
             results = []
-            async for r in run_attacks(attacks, target, model, use_judge):
+            async for r in run_attacks(attacks, target, model, use_judge, defences=defences):
                 a = next(x for x in attacks if x.id == r["id"])
                 extra = f" ({r['leak_type']})" if r["leak_type"] and r["leak_type"] != "plain" else ""
                 why = f"  - judge: {r['judge_reason']}" if r.get("judge_reason") and r["outcome"] != "refused" else ""
-                print(f"  [{LABELS[r['outcome']]:^12}] {a.severity:<8} {a.name}{extra}{why}")
+                by = f"  (stopped by {r['blocked_by']})" if r.get("blocked_by") else ""
+                print(f"  [{LABELS[r['outcome']]:^12}] {a.severity:<8} {a.name}{extra}{by}{why}")
                 results.append(r)
         finally:
             if planted:
@@ -53,7 +57,7 @@ async def attack_one(target, attacks, model, use_judge, make_report=False):
                 print(f"  removed {len(planted)} test document(s)")
     s = summarise(attacks, results)
     path = save_run({"target": target.url, "target_id": target.id, "target_name": target.name, "model": model,
-                     "judge": use_judge, "secrets": target.secrets, "policy": target.policy,
+                     "judge": use_judge, "defences": defences, "secrets": target.secrets, "policy": target.policy,
                      "fixtures": [f.title for f in target.fixtures], "fixtures_planted": len(planted),
                      "control": target.control, "expected_leak_categories": target.expected_leak_categories},
                     attacks, results)
@@ -76,14 +80,17 @@ async def attack_one(target, attacks, model, use_judge, make_report=False):
     if make_report:
         from redteam.report import write_report
         print(f"  Report: {write_report(path)}")
+    s["blocked_by"] = {d: sum(r.get("blocked_by") == d for r in results) for d in defences}
+    s["defence_errors"] = sum(bool(r.get("defence_error")) for r in results)
     return model or target.id, s
 
 
 STATUS = {"already_leaked": "leaked already (no AI needed)", "broken": "BROKEN by the AI attacker",
-          "partial": "partial leak only", "held": "held - every AI attempt blocked"}
+          "partial": "partial leak only", "held": "held - every AI attempt blocked",
+          "error": "not tested - the target or attacker failed (see the error above)"}
 
 
-async def evolve_one(target, model, seeds, rounds, use_judge):
+async def evolve_one(target, model, seeds, rounds, use_judge, defences=None):
     chosen = pick_seeds(target.load_attacks(), seeds)
     print(f"\n=== AI attacker ({ATTACKER_MODELS[0]}) vs {target.name}{f' · {model}' if model else ''}"
           f"  -  {len(chosen)} seed attacks, up to {rounds} rounds each")
@@ -96,7 +103,7 @@ async def evolve_one(target, model, seeds, rounds, use_judge):
                     planted = await plant_fixtures(admin, target)
                 except Exception as e:
                     raise SystemExit(f"  ✗ Could not plant the test documents, run stopped: {e}")
-            async for ev in evolve(target, chosen, model, rounds, use_judge):
+            async for ev in evolve(target, chosen, model, rounds, use_judge, defences):
                 log.append(ev)
                 if ev["type"] == "attempt":
                     tag = "seed" if ev["round"] == 0 else f"AI {ev['round']}"
@@ -114,7 +121,7 @@ async def evolve_one(target, model, seeds, rounds, use_judge):
     s = summarise_evolution(seed_results)
     path = save_evolution({"target": target.url, "target_id": target.id, "target_name": target.name, "model": model,
                            "attacker_model": ATTACKER_MODELS[0], "judge": use_judge, "rounds": rounds,
-                           "goal": target.attacker_goal}, log, seed_results)
+                           "defences": defences or [], "goal": target.attacker_goal}, log, seed_results)
     gen, added = save_generated(target, chosen, seed_results)
     print(f"\n  Library attacks the bot blocked: {s['seeds'] - s['already_leaked']}  ·  broken by the AI: {s['broken_by_ai']}"
           f"  ·  AI success rate: {s['ai_success_rate']}%  ·  avg rounds to break: {s['avg_rounds_to_break']}")
@@ -130,17 +137,23 @@ def main() -> None:
     p.add_argument("--judge", action="store_true", help="grade every reply with an AI judge (JUDGE_MODEL)")
     p.add_argument("--report", action="store_true", help="write an HTML security report to reports/ after each run")
     p.add_argument("--generated", action="store_true", help="also run attacks the AI attacker found earlier (generated/)")
+    p.add_argument("--defences", default="", help="comma-separated defences to switch on (ShopBot: guard,prompt,output,nosecret)")
+    p.add_argument("--compare-defences", action="store_true", help="run with no defence, each defence alone, then all together")
     p.add_argument("--evolve", action="store_true", help="AI attacker: let an LLM invent new attacks from the library")
     p.add_argument("--seeds", type=int, default=4, help="--evolve: how many library attacks to start from")
     p.add_argument("--rounds", type=int, default=3, help="--evolve: max new AI attempts per seed")
     args = p.parse_args()
 
     target = targets[args.target]
+    defences = [d.strip() for d in args.defences.split(",") if d.strip()]
+    unknown = [d for d in defences if d not in target.defences]
+    if unknown or (args.compare_defences and not target.defences):
+        raise SystemExit(f"{target.id} supports these defences: {', '.join(target.defences) or 'none'}")
     if args.evolve:
         if not target.attacker_goal or target.control:
             raise SystemExit(f"The AI attacker is not enabled for {target.id} (set attacker_goal in targets.yaml)")
         model = (args.model or os.getenv("BOT_MODEL")) if target.model_select else None
-        asyncio.run(evolve_one(target, model, args.seeds, args.rounds, args.judge))
+        asyncio.run(evolve_one(target, model, args.seeds, args.rounds, args.judge, defences))
         return
     attacks = target.load_attacks(include_generated=args.generated)
     if args.category:
@@ -150,8 +163,25 @@ def main() -> None:
     else:
         models = [None]
 
+    if args.compare_defences:
+        model = models[0] if args.model or len(models) == 1 else (os.getenv("BOT_MODEL") or models[0])
+        configs = [[]] + [[d] for d in target.defences] + [list(target.defences)]
+
+        async def go_defences():
+            return [(cfg, (await attack_one(target, attacks, model, args.judge, args.report, cfg))[1]) for cfg in configs]
+
+        rows = asyncio.run(go_defences())
+        print(f"\n=== Defences: before / after  ({model})")
+        print(f"  {'defences':<34} {'score':>6} {'leaked':>7} {'partial':>8}  over-refusal  stopped by defence")
+        for cfg, s in rows:
+            name = " + ".join(target.defences[d] for d in cfg) or "none (before)"
+            stopped = ", ".join(f"{d} {n}" for d, n in s["blocked_by"].items() if n) or "-"
+            print(f"  {name[:34]:<34} {s['score']:>5}% {s['leaked']:>7} {s['partial']:>8}  {'YES' if s['over_refusal'] else 'no':<12}  {stopped}"
+                  + (f"  ({s['defence_errors']} defence errors)" if s["defence_errors"] else ""))
+        return
+
     async def go():
-        return [await attack_one(target, attacks, m, args.judge, args.report) for m in models]
+        return [await attack_one(target, attacks, m, args.judge, args.report, defences) for m in models]
 
     rows = asyncio.run(go())
     if len(rows) > 1:

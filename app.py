@@ -84,15 +84,21 @@ def config(target: str = "shopbot", generated: bool = False):
     }
 
 
+def parse_defences(t, defences: str) -> list[str]:
+    """'guard,output' -> ['guard', 'output'], only ids this target supports."""
+    return [d for d in dict.fromkeys(x.strip() for x in defences.split(",")) if d in t.defences]
+
+
 def sse(event: str | None, data) -> str:
     return (f"event: {event}\n" if event else "") + f"data: {json.dumps(data)}\n\n"
 
 
 @app.get("/api/run")
 async def run(target: str = "shopbot", model: str | None = None, category: str | None = None, judge: bool = False,
-              generated: bool = False):
+              generated: bool = False, defences: str = ""):
     """Plant test documents (if any), run the attacks, stream every result (SSE), clean up."""
     t = get_target(target)
+    defs = parse_defences(t, defences)
     attacks = t.load_attacks(include_generated=generated)
     if category:
         attacks = [a for a in attacks if a.category in (category, "baseline")]
@@ -112,11 +118,11 @@ async def run(target: str = "shopbot", model: str | None = None, category: str |
                         return
                     yield sse("status", f"Planted {len(planted)} test document(s). Attacking…")
                 results = []
-                async for r in run_attacks(attacks, t, model, use_judge=judge):
+                async for r in run_attacks(attacks, t, model, use_judge=judge, defences=defs):
                     results.append(r)
                     yield sse(None, r)
                 path = save_run({"target": t.url, "target_id": t.id, "target_name": t.name, "model": model,
-                                 "category": category, "judge": judge, "generated": generated, "secrets": t.secrets,
+                                 "category": category, "judge": judge, "generated": generated, "defences": defs, "secrets": t.secrets,
                                  "policy": t.policy, "fixtures": [f.title for f in t.fixtures], "fixtures_planted": len(planted),
                                  "control": t.control, "expected_leak_categories": t.expected_leak_categories},
                                 attacks, results)
@@ -131,9 +137,10 @@ async def run(target: str = "shopbot", model: str | None = None, category: str |
 
 @app.get("/api/evolve")
 async def evolve_run(target: str = "shopbot", model: str | None = None, seeds: int = 4, rounds: int = 3,
-                     judge: bool = False, seed_ids: str = ""):
+                     judge: bool = False, seed_ids: str = "", defences: str = ""):
     """AI attacker: start from library attacks and let an LLM invent better ones, round by round (SSE)."""
     t = get_target(target)
+    defs = parse_defences(t, defences)
     if not t.attacker_goal or t.control:
         raise HTTPException(400, "the AI attacker is not enabled for this target (set attacker_goal in targets.yaml)")
     seeds, rounds = max(1, min(seeds, 10)), max(1, min(rounds, 6))
@@ -156,13 +163,13 @@ async def evolve_run(target: str = "shopbot", model: str | None = None, seeds: i
                                     "attacker_model": ATTACKER_MODELS[0]})
                 yield sse("status", f"AI attacker ({ATTACKER_MODELS[0]}) is working on {len(chosen)} attacks, "
                                     f"up to {rounds} new attempts each…")
-                async for ev in evolve(t, chosen, model, rounds, judge):
+                async for ev in evolve(t, chosen, model, rounds, judge, defs):
                     log.append(ev)
                     if ev["type"] == "seed_done":
                         seed_results.append(ev)
                     yield sse(ev["type"], ev)
                 path = save_evolution({"target": t.url, "target_id": t.id, "target_name": t.name, "model": model,
-                                       "attacker_model": ATTACKER_MODELS[0], "judge": judge, "rounds": rounds,
+                                       "attacker_model": ATTACKER_MODELS[0], "judge": judge, "rounds": rounds, "defences": defs,
                                        "goal": t.attacker_goal}, log, seed_results)
                 gen_path, added = save_generated(t, chosen, seed_results)
                 yield sse("done", {"summary": summarise_evolution(seed_results), "saved": path.name,
@@ -184,7 +191,7 @@ def runs():
         try:
             d = json.loads(p.read_text(encoding="utf-8"))
             out.append({"file": p.name, "model": d.get("model"), "target_name": d.get("target_name") or "ShopBot (demo)",
-                        "finished_at": d.get("finished_at"), "judge": d.get("judge", False),
+                        "finished_at": d.get("finished_at"), "judge": d.get("judge", False), "defences": d.get("defences") or [],
                         **{k: d["summary"].get(k) for k in ("score", "leaked", "partial", "completed", "errors")}})
         except Exception:
             continue
@@ -207,6 +214,7 @@ class TryRequest(BaseModel):
     message: str
     model: str | None = None
     judge: bool = False
+    defences: list[str] = []
 
 
 @app.post("/api/try")
@@ -214,7 +222,8 @@ async def try_attack(req: TryRequest):
     """Send one custom message (the 'Try your own attack' box). Test documents are not planted here."""
     t = get_target(req.target)
     async with httpx.AsyncClient(timeout=240) as client:
-        res = await send(client, t, req.model if t.model_select else None, req.message)
+        res = await send(client, t, req.model if t.model_select else None, req.message,
+                         parse_defences(t, ",".join(req.defences)))
     how, secret = find_any_leak(res["reply"], t.secrets) if not res["error"] else (None, None)
     verdict = await judge(req.message, res["reply"], t.policy, t.secrets) if req.judge and not res["error"] else None
     outcome = "error" if res["error"] else "full_leak" if how else (

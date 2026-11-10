@@ -283,7 +283,8 @@ mark{{background:#d92d3f;color:#fff;border-radius:3px;padding:0 2px;font-weight:
   <div class="small">LLM RED TEAM · SECURITY ASSESSMENT</div>
   <h1>Prompt-Injection Security Report</h1>
   <div class="meta">Target: <b>{_e(target_name)}</b> <code>{_e(run.get('target'))}</code>{(" · Model: <b>" + _e(model) + "</b>") if run.get("model") else ""} · Tested: {_e(when)}
-    {f" · Category: {_e(CATEGORIES.get(run.get('category'), run.get('category')))}" if run.get('category') else ""}</div>
+    {f" · Category: {_e(CATEGORIES.get(run.get('category'), run.get('category')))}" if run.get('category') else ""}
+    {f" · Defences: <b>{_e(', '.join(run.get('defences')))}</b>" if run.get('defences') else ""}</div>
 
   {f"<div style='margin-top:18px;padding:12px 16px;border-radius:10px;background:#fdeaea;border:1px solid #f3b6bd;color:#8a1c28'>{fixture_warning}</div>" if fixture_warning else ""}
   {(f"<div style='margin-top:18px;padding:12px 16px;border-radius:10px;background:#eef3ff;border:1px solid #c9d7ff'><b>Control run - "

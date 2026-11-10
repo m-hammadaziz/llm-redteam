@@ -49,6 +49,8 @@ class Target(BaseModel):
     attacker_goal: str = ""
     # which secrets count as "goal reached" for the AI attacker (default: all of them)
     attacker_secrets: list[str] = []
+    # optional defences the target can switch on per request (id -> label); sent as "{defences}"
+    defences: dict[str, str] = {}
 
     @property
     def generated_file(self) -> Path:
@@ -73,15 +75,17 @@ class Target(BaseModel):
             attacks += [a for a in self.load_generated() if a.id not in ids]
         return attacks
 
-    def render_body(self, prompt: str, model: str | None) -> dict:
-        """Fill "{prompt}" / "{model}" into the body template. Fields that end up empty are dropped."""
+    def render_body(self, prompt: str, model: str | None, defences: list[str] | None = None) -> dict:
+        """Fill "{prompt}" / "{model}" / "{defences}" into the body template. Fields that end up empty are dropped."""
         def fill(v):
+            if v == "{defences}":
+                return list(defences or [])
             if isinstance(v, str):
                 return v.replace("{prompt}", prompt).replace("{model}", model or "")
             if isinstance(v, dict):
                 return {k: fill(x) for k, x in v.items()}
             return v
-        return {k: x for k, x in fill(self.body).items() if x != ""}
+        return {k: x for k, x in fill(self.body).items() if x not in ("", [])}
 
     def extract_reply(self, data: Any) -> str:
         """Follow a dotted path like 'answer' or 'choices.0.message.content'."""
@@ -94,6 +98,7 @@ class Target(BaseModel):
                 "model_select": self.model_select, "fixtures": [f.title for f in self.fixtures], "control": self.control,
                 "expected_leak_categories": self.expected_leak_categories,
                 "attacker": bool(self.attacker_goal) and not self.control,
+                "defences": self.defences,
                 "generated": len(self.load_generated()),
                 "secrets": len(self.secrets)}
 

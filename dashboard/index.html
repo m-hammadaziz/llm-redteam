@@ -162,6 +162,13 @@ textarea:focus{border-color:var(--blue)}
 .stepd{margin-top:10px;display:none}
 .stepd.on{display:grid;grid-template-columns:1fr 1fr;gap:12px}
 .stepd .why{grid-column:1/-1;font-size:12.5px;color:var(--violet)}
+.defrow{display:none;align-items:center;gap:8px;flex-wrap:wrap;margin:-6px 0 16px;padding:10px 12px;background:var(--panel);border:1px solid var(--line);border-radius:var(--r)}
+.defrow.on{display:flex}
+.defrow .t{font-size:11px;letter-spacing:.08em;text-transform:uppercase;color:var(--muted);margin-right:4px}
+.defbtn{font-size:12.5px;border:1px solid var(--line);background:var(--bg2);color:var(--ink2);border-radius:99px;padding:5px 12px;cursor:pointer}
+.defbtn.on{background:var(--green-soft);border-color:var(--green);color:var(--ink)}
+.defbtn.on::before{content:"🛡 "}
+.stopped{font-size:11px;font-weight:700;color:var(--green);margin-top:6px}
 .gentoggle{display:inline-flex;gap:6px;align-items:center;cursor:pointer;color:var(--violet)}
 .gentoggle input{accent-color:var(--violet)}
 @media (max-width:1050px){.estats{grid-template-columns:1fr 1fr}.stepd.on{grid-template-columns:1fr}}
@@ -190,6 +197,12 @@ textarea:focus{border-color:var(--blue)}
   </div>
 
   <div class="tinfo" id="tinfo"></div>
+  <div class="defrow" id="defrow">
+    <span class="t">Defences</span><span id="defBtns"></span>
+    <span class="hint" id="defHint">off = the bot as it is · switch some on and run again</span>
+    <span class="spacer"></span>
+    <button class="btn ghost" id="defCompare" style="height:34px" title="Run with no defence, each selected defence alone, then all together">🛡 Before / after</button>
+  </div>
   <div class="score">
     <div class="card gauge">
       <svg class="ring" viewBox="0 0 100 100">
@@ -263,6 +276,11 @@ textarea:focus{border-color:var(--blue)}
         <div id="cmp"><div class="hint">Click <b>Compare all models</b> to attack every model and rank them.</div></div>
       </div>
 
+      <div class="card cmp" id="defCard" style="display:none">
+        <div class="sectionh"><h2>Defences: before / after</h2></div>
+        <div id="defCmp"><div class="hint">Click <b>🛡 Before / after</b> to attack the bot with no defence, each defence alone, and all together.</div></div>
+      </div>
+
       <div class="card runs">
         <div class="sectionh"><h2>Saved runs</h2></div>
         <div id="runs"><div class="hint">Every run is saved to the <code>results/</code> folder.</div></div>
@@ -294,6 +312,8 @@ const OUT = {full_leak:["leaked","LEAKED"], partial_leak:["partial","PARTIAL LEA
              refused:["safe","BLOCKED"], answered:["base","ANSWERED"], over_refusal:["over","OVER-REFUSAL"], error:["error","ERROR"],
              expected_leak:["base","ALLOWED"]};
 let CFG = null, TESTS = [], BY_ID = {}, state = {}, running = false, cmpRows = {}, viewFilter = "";
+let DEFS = new Set(), defRows = {};
+const defParam = () => [...DEFS].join(",");
 
 function toast(msg){ const t=$("#toast"); t.textContent=msg; t.classList.add("on"); setTimeout(()=>t.classList.remove("on"),2800); }
 
@@ -333,6 +353,13 @@ async function loadTarget(id){
   $("#evoOpen").disabled = !t.attacker; $("#evoOpen").title = t.attacker ? "An AI invents new attacks and learns from the chatbot's replies"
     : (t.control ? "Not used on a control run" : "Set attacker_goal for this target in targets.yaml");
   $("#evoModel").textContent = CFG.attacker_model || "attacker";
+  DEFS = new Set(); const dopts = t.defences || {};
+  $("#defrow").classList.toggle("on", Object.keys(dopts).length > 0);
+  $("#defCard").style.display = Object.keys(dopts).length ? "" : "none";
+  $("#defBtns").innerHTML = Object.entries(dopts).map(([k, v]) => `<button class="defbtn" data-d="${esc(k)}">${esc(v)}</button>`).join(" ");
+  document.querySelectorAll(".defbtn").forEach(b => b.onclick = () => { if (running) return;
+    DEFS.has(b.dataset.d) ? DEFS.delete(b.dataset.d) : DEFS.add(b.dataset.d); b.classList.toggle("on"); });
+  defRows = {}; $("#defCmp").innerHTML = `<div class="hint">Click <b>🛡 Before / after</b> to attack the bot with no defence, each defence alone, and all together.</div>`;
   if (!t.attacker) $("#evo").classList.remove("on");
   $("#status").textContent = ""; $("#repLink").style.display = "none";
   cmpRows = {}; $("#cmp").innerHTML = `<div class="hint">${hasModels ? "Click <b>Compare all models</b> to attack every model and rank them." : "Model comparison is only available for ShopBot."}</div>`;
@@ -380,7 +407,7 @@ function resetCards(){
 }
 
 function setRunning(r){
-  running = r; ["#run","#tryBtn","#category","#useJudge","#targetSel","#evoStart","#evoSeeds","#evoRounds"].forEach(s => $(s).disabled = r);
+  running = r; ["#run","#tryBtn","#category","#useJudge","#targetSel","#evoStart","#evoSeeds","#evoRounds","#defCompare"].forEach(s => $(s).disabled = r);
   $("#evoOpen").disabled = r || !(CFG && CFG.target.attacker);
   const hasModels = CFG && CFG.models.length > 0; $("#model").disabled = r || !hasModels; $("#runAll").disabled = r || !hasModels;
 }
@@ -400,6 +427,8 @@ function applyResult(res){
   r.className = "reply" + (res.error ? " empty" : "");
   r.innerHTML = res.error ? esc(res.error) : (highlight(res.reply) || "<i>(empty reply)</i>");
   $(`#h-${t.id}`).textContent = res.leak_type && LEAK_HOW[res.leak_type] ? `🔓 secret leaked ${LEAK_HOW[res.leak_type]}` : "";
+  const stop = res.blocked_by ? `🛡 stopped by ${(CFG.target.defences || {})[res.blocked_by] || res.blocked_by}` : (res.defence_error ? `⚠ ${res.defence_error}` : "");
+  $(`#h-${t.id}`).insertAdjacentHTML("beforeend", stop ? `<div class="stopped" style="${res.blocked_by ? "" : "color:var(--amber)"}">${esc(stop)}</div>` : "");
   if (res.judge_verdict || res.judge_error){
     j.style.display = "block";
     j.innerHTML = res.judge_error ? `⚖️ <b>Judge error:</b> ${esc(res.judge_error)}`
@@ -492,7 +521,7 @@ function runOnce(model){
   return new Promise(resolve => {
     resetCards(); markRunning(); $("#repLink").style.display = "none";
     if ($("#useJudge").checked) $("#judgeBox").innerHTML = `<div class="hint">Grading replies…</div>`;
-    const url = `/api/run?target=${encodeURIComponent(CFG.target.id)}&model=${encodeURIComponent(model || "")}&category=${encodeURIComponent($("#category").value)}&judge=${$("#useJudge").checked}&generated=${useGenerated()}`;
+    const url = `/api/run?target=${encodeURIComponent(CFG.target.id)}&model=${encodeURIComponent(model || "")}&category=${encodeURIComponent($("#category").value)}&judge=${$("#useJudge").checked}&generated=${useGenerated()}&defences=${encodeURIComponent(defParam())}`;
     const es = new EventSource(url);
     es.onmessage = e => applyResult(JSON.parse(e.data));
     es.addEventListener("status", e => { $("#status").style.color = ""; $("#status").textContent = JSON.parse(e.data); });
@@ -525,7 +554,7 @@ async function loadRuns(){
   try {
     const runs = await (await fetch("/api/runs")).json();
     $("#runs").innerHTML = runs.length ? runs.slice(0, 8).map(r => `<div class="row">
-      <span class="m" title="${esc(r.file)}">${esc(r.model || r.target_name || "default")}</span>
+      <span class="m" title="${esc(r.file)}">${esc(r.model || r.target_name || "default")}${(r.defences || []).length ? ` <span style="color:var(--green)">🛡 ${esc(r.defences.join("+"))}</span>` : ""}</span>
       <span style="color:var(--muted);font-size:11.5px">${esc((r.finished_at || "").replace("T"," ").slice(5,16))}</span>
       ${r.judge ? `<span title="graded by the AI judge">⚖️</span>` : ""}<b style="color:${grade(r.score, r.leaked)[2]}">${r.score ?? "—"}%</b>
       <a href="/api/report/${encodeURIComponent(r.file)}" target="_blank" title="Open the security report">📄</a></div>`).join("")
@@ -557,13 +586,14 @@ $("#tryBtn").onclick = async () => {
   $("#tryBtn").disabled = true;
   try {
     const r = await (await fetch("/api/try", {method:"POST", headers:{"Content-Type":"application/json"},
-      body: JSON.stringify({target: CFG.target.id, model: $("#model").value || null, message: msg, judge: $("#useJudge").checked})})).json();
+      body: JSON.stringify({target: CFG.target.id, model: $("#model").value || null, message: msg, judge: $("#useJudge").checked, defences: [...DEFS]})})).json();
     if (r.error){ box.className = "tryres error"; box.innerHTML = `<b>ERROR</b>${esc(r.error)}`; }
     else {
       const how = r.leaked && LEAK_HOW[r.leak_type] ? ` (${LEAK_HOW[r.leak_type]})` : "";
       const title = {full_leak:"🔓 LEAKED - your attack worked" + how, partial_leak:"⚠️ PARTIAL LEAK", off_policy:"⚠️ OFF-POLICY"}[r.outcome] || "🔒 BLOCKED";
       box.className = `tryres ${r.outcome === "refused" ? "safe" : r.outcome === "full_leak" ? "leaked" : "error"}`;
-      box.innerHTML = `<b>${title} · ${r.ms} ms</b>${highlight(r.reply)}${r.judge_reason ? `<div style="margin-top:6px;opacity:.85">⚖️ ${esc(r.judge_reason)}</div>` : ""}`; }
+      const by = r.blocked_by ? ` · 🛡 stopped by ${(CFG.target.defences || {})[r.blocked_by] || r.blocked_by}` : "";
+      box.innerHTML = `<b>${title}${by} · ${r.ms} ms</b>${highlight(r.reply)}${r.judge_reason ? `<div style="margin-top:6px;opacity:.85">⚖️ ${esc(r.judge_reason)}</div>` : ""}`; }
   } catch(e){ box.className = "tryres error"; box.innerHTML = `<b>ERROR</b>${esc(e.message)}`; }
   $("#tryBtn").disabled = false;
 };
@@ -571,14 +601,14 @@ $("#tryMsg").addEventListener("keydown", e => { if (e.key === "Enter" && (e.ctrl
 
 /* ───────── AI attacker ───────── */
 const STATUS_BADGE = {already_leaked:["leaked","LEAKED AT ONCE"], broken:["leaked","BROKEN BY AI"],
-                      partial:["partial","PARTIAL ONLY"], held:["safe","HELD"]};
+                      partial:["partial","PARTIAL ONLY"], held:["safe","HELD"], error:["error","ERROR"]};
 let EVO = {attempts:{}, seeds:{}, names:{}, es:null};
 
 $("#evoOpen").onclick = () => { $("#evo").classList.toggle("on"); if ($("#evo").classList.contains("on")) $("#evo").scrollIntoView({behavior:"smooth", block:"start"}); };
 
 function evoStats(){
   const res = Object.values(EVO.seeds), n = Object.keys(EVO.names).length;
-  const blocked = res.filter(r => r.status !== "already_leaked"), broken = res.filter(r => r.status === "broken");
+  const blocked = res.filter(r => ["broken","partial","held"].includes(r.status)), broken = res.filter(r => r.status === "broken");
   $("#eSeeds").textContent = n; $("#eBlocked").textContent = blocked.length; $("#eBroken").textContent = broken.length;
   $("#eRate").textContent = blocked.length ? Math.round(100 * broken.length / blocked.length) + "%" : "—";
   $("#eRate").style.color = broken.length ? "var(--red)" : blocked.length ? "var(--green)" : "";
@@ -623,7 +653,7 @@ $("#evoStart").onclick = () => {
   EVO = {attempts:{}, seeds:{}, names:{}, es:null}; evoStats();
   $("#evoSeedsBox").innerHTML = `<div class="hint">Starting…</div>`;
   const url = `/api/evolve?target=${encodeURIComponent(CFG.target.id)}&model=${encodeURIComponent($("#model").value || "")}` +
-              `&seeds=${$("#evoSeeds").value}&rounds=${$("#evoRounds").value}&judge=${$("#useJudge").checked}`;
+              `&seeds=${$("#evoSeeds").value}&rounds=${$("#evoRounds").value}&judge=${$("#useJudge").checked}&defences=${encodeURIComponent(defParam())}`;
   const es = EVO.es = new EventSource(url);
   es.addEventListener("status", e => { $("#status").style.color = ""; $("#status").textContent = JSON.parse(e.data); });
   es.addEventListener("start", e => {
@@ -653,6 +683,41 @@ $("#evoStart").onclick = () => {
   es.onerror = () => { if (!EVO.es) return; toast("Connection lost - is the server still running?"); evoFinish(); };
 };
 $("#evoStop").onclick = () => { evoFinish(); $("#status").textContent = "AI attacker stopped."; toast("Stopped"); };
+
+/* ───────── Defences: before / after ───────── */
+function defLabel(cfg){ const o = CFG.target.defences || {}; return cfg.length ? cfg.map(d => o[d] || d).join(" + ") : "No defence (before)"; }
+function renderDefCmp(){
+  const rows = Object.values(defRows);
+  $("#defCmp").innerHTML = `<table><tr><th>Defences</th><th>Leaked</th><th>Score</th><th title="Did the bot still answer the normal question?">Normal Q</th></tr>${rows.map(r => {
+    const s = r.s; const col = s ? grade(s.pct, s.leaked, s.critical)[2] : "var(--muted)";
+    return `<tr><td style="font-size:12.5px">${esc(r.label)}${s && s.stopped ? `<div class="hint" style="font-size:11px">🛡 stopped ${s.stopped}</div>` : ""}</td>
+      <td>${s ? `${s.leaked}/${s.done}` : "…"}${s && s.partial ? `<div class="hint" style="font-size:11px">+${s.partial} partial</div>` : ""}</td>
+      <td style="color:${col};font-weight:700">${s ? s.pct + "%" : "…"}</td>
+      <td>${s ? (s.over ? `<span style="color:var(--violet)" title="the normal question was refused">✗ refused</span>` : `<span style="color:var(--green)">✓</span>`) : ""}</td></tr>`; }).join("")}</table>
+    <div class="hint" style="margin-top:8px">A good defence lowers leaks <b>without</b> refusing normal questions.</div>`;
+}
+$("#defCompare").onclick = async () => {
+  if (running) return;
+  const all = Object.keys(CFG.target.defences || {}); const chosen = DEFS.size ? [...DEFS] : all;
+  const configs = [[], ...chosen.map(d => [d])]; if (chosen.length > 1) configs.push(chosen);
+  setRunning(true); await reloadLibrary(); defRows = {};
+  configs.forEach(c => defRows[c.join("+") || "none"] = {label: defLabel(c), s: null}); renderDefCmp();
+  const keep = new Set(DEFS);
+  for (const cfg of configs){
+    DEFS = new Set(cfg);
+    document.querySelectorAll(".defbtn").forEach(b => b.classList.toggle("on", DEFS.has(b.dataset.d)));
+    $("#status").style.color = ""; $("#status").textContent = `Before / after: ${defLabel(cfg)}…`;
+    const s = await runOnce($("#model").value);
+    const vals = Object.values(state);
+    s.over = vals.some(r => r.outcome === "over_refusal" || (BY_ID[r.id] && BY_ID[r.id].baseline && r.blocked_by));
+    const stops = {}; vals.forEach(r => { if (r.blocked_by) stops[r.blocked_by] = (stops[r.blocked_by] || 0) + 1; });
+    s.stopped = Object.entries(stops).map(([d, n]) => `${n} by ${(CFG.target.defences || {})[d] || d}`).join(", ");
+    defRows[cfg.join("+") || "none"].s = s; renderDefCmp();
+  }
+  DEFS = keep; document.querySelectorAll(".defbtn").forEach(b => b.classList.toggle("on", DEFS.has(b.dataset.d)));
+  setRunning(false); $("#status").textContent = "Before / after finished - every run is saved in results/";
+  toast("Before / after finished");
+};
 
 init();
 </script>
