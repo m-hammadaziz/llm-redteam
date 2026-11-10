@@ -3,3 +3,4 @@
 __pycache__/
 results/
 reports/
+.pytest_cache/

@@ -1,0 +1,97 @@
+# Runs on every push and pull request:
+#   1. tests          - the full offline test suite (no API key needed)
+#   2. security-gate  - starts ShopBot and attacks it for real with every attack in the
+#                       library. The build FAILS if the security score drops below the
+#                       minimum, so a weaker prompt or model never gets merged silently.
+#
+# Setup: repository Settings -> Secrets and variables -> Actions -> New repository secret
+#        name: GROQ_API_KEY   value: your Groq key
+# Without the secret the security gate is skipped with a warning; the tests still run.
+
+name: LLM red team
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:          # "Run workflow" button: try other models / defences
+    inputs:
+      model:
+        description: ShopBot model to attack
+        default: openai/gpt-oss-20b
+      defences:
+        description: "Defences to switch on: guard,prompt,output,nosecret (or none)"
+        default: prompt,output
+      min_score:
+        description: Minimum security score (%) to pass
+        default: "90"
+  schedule:
+    - cron: "23 4 * * 1"      # every Monday: models behind an API can change without notice
+
+permissions:
+  contents: read
+
+jobs:
+  tests:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+      - run: pip install -r requirements-dev.txt
+      - run: pytest
+
+  security-gate:
+    needs: tests
+    # Secrets are not available to pull requests from forks, so the live attack runs on
+    # pushes, manual runs and the weekly schedule.
+    if: github.event_name != 'pull_request'
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    env:
+      GROQ_API_KEY: ${{ secrets.GROQ_API_KEY }}
+      GATE_MODEL: ${{ inputs.model || 'openai/gpt-oss-20b' }}
+      GATE_DEFENCES: ${{ inputs.defences || 'prompt,output' }}
+      GATE_MIN_SCORE: ${{ inputs.min_score || '90' }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+      - run: pip install -r requirements.txt
+
+      - name: Check the Groq key
+        id: key
+        run: |
+          if [ -z "$GROQ_API_KEY" ]; then
+            echo "::warning::Add the GROQ_API_KEY repository secret to run the live security gate."
+            echo "skip=true" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Start ShopBot and the red-team server
+        if: steps.key.outputs.skip != 'true'
+        run: |
+          uvicorn app:app --port 8100 > server.log 2>&1 &
+          for i in $(seq 1 30); do curl -sf http://localhost:8100/target/health && exit 0; sleep 1; done
+          cat server.log; exit 1
+
+      - name: Attack ShopBot (security gate)
+        if: steps.key.outputs.skip != 'true'
+        run: |
+          if [ "$GATE_DEFENCES" = "none" ]; then GATE_DEFENCES=""; fi
+          python -m redteam.cli --target shopbot --model "$GATE_MODEL" --defences "$GATE_DEFENCES" \
+            --min-score "$GATE_MIN_SCORE" --report --summary-md "$GITHUB_STEP_SUMMARY"
+
+      - name: Upload results and security report
+        if: always() && steps.key.outputs.skip != 'true'
+        uses: actions/upload-artifact@v4
+        with:
+          name: redteam-results
+          path: |
+            results/
+            reports/
+            server.log
+          if-no-files-found: ignore
