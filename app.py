@@ -11,17 +11,19 @@ It serves:
 """
 import json
 import os
+import re
 from pathlib import Path
 
 import httpx
 from dotenv import load_dotenv
 from fastapi import FastAPI, HTTPException, Request
-from fastapi.responses import FileResponse, StreamingResponse
+from fastapi.responses import FileResponse, HTMLResponse, StreamingResponse
 from pydantic import BaseModel
 
 from redteam.detectors import find_leak
 from redteam.library import CATEGORIES, OWASP, load_attacks
 from redteam.judge import JUDGE_MODEL, judge
+from redteam.report import build_report
 from redteam.runner import LABELS, PENALTY, RESULTS_DIR, run_attacks, save_run, send, summarise
 from target_bot.app import BOT_MODEL, CANARY
 from target_bot.app import app as shopbot
@@ -95,6 +97,17 @@ def runs():
         except Exception:
             continue
     return out
+
+
+@app.get("/api/report/{file}", response_class=HTMLResponse)
+def report(file: str):
+    """Security report for one saved run (open it, then use Print -> Save as PDF)."""
+    if not re.fullmatch(r"run-[\w.-]+\.json", file):  # only plain file names from results/
+        raise HTTPException(400, "invalid run file name")
+    path = RESULTS_DIR / file
+    if not path.is_file():
+        raise HTTPException(404, "run not found")
+    return HTMLResponse(build_report(json.loads(path.read_text(encoding="utf-8")), CANARY, file))
 
 
 class TryRequest(BaseModel):

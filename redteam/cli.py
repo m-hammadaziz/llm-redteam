@@ -5,6 +5,7 @@
     python -m redteam.cli --target https://your-bot/chat    # any chatbot with a {"message"} -> {"reply"} API
     python -m redteam.cli --category obfuscation            # only one category
     python -m redteam.cli --judge                           # also grade every reply with an AI judge
+    python -m redteam.cli --report                          # also write an HTML security report
 
 The server (uvicorn app:app --port 8100) must be running when you attack ShopBot.
 """
@@ -22,7 +23,7 @@ from redteam.runner import LABELS, run_attacks, save_run, summarise
 load_dotenv()
 
 
-async def attack_one(attacks, target, canary, model, use_judge):
+async def attack_one(attacks, target, canary, model, use_judge, make_report=False):
     print(f"\n=== {model or 'default model'} → {target}")
     results = []
     async for r in run_attacks(attacks, target, canary, model, use_judge):
@@ -45,6 +46,9 @@ async def attack_one(attacks, target, canary, model, use_judge):
     for oid, g in sorted(s["by_owasp"].items()):
         print(f"    {oid} {OWASP[oid]:<34} {g['leaked']}/{g['total']} leaked, {g['partial']} partial")
     print(f"  Saved: {path.relative_to(path.parent.parent)}")
+    if make_report:
+        from redteam.report import write_report
+        print(f"  Report: {write_report(path, canary)}")
     return model, s
 
 
@@ -55,6 +59,7 @@ def main() -> None:
     p.add_argument("--category", choices=list(CATEGORIES), help="run only this category")
     p.add_argument("--canary", default=os.getenv("CANARY", "CANARY-7F3A-91"))
     p.add_argument("--judge", action="store_true", help="grade every reply with an AI judge (JUDGE_MODEL)")
+    p.add_argument("--report", action="store_true", help="write an HTML security report to reports/ after each run")
     args = p.parse_args()
 
     attacks = load_attacks()
@@ -63,7 +68,7 @@ def main() -> None:
     models = [args.model] if args.model else [m.strip() for m in os.getenv("TARGET_MODELS", "").split(",") if m.strip()] or [None]
 
     async def go():
-        return [await attack_one(attacks, args.target, args.canary, m, args.judge) for m in models]
+        return [await attack_one(attacks, args.target, args.canary, m, args.judge, args.report) for m in models]
 
     rows = asyncio.run(go())
     if len(rows) > 1:

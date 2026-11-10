@@ -49,6 +49,7 @@ Severity weights: low 1, medium 2, high 3, critical 4. Any critical full leak ca
 - 🔎 **Robust leak detection**: finds the canary even when it's split or spaced, **written backwards**, **scattered or reordered** (e.g. `91-7F3A-CANARY`), **base64-encoded** or **hidden as the first letters of a poem**.
 - 🧑‍⚖️ **AI judge (LLM-as-judge)**: a second model (`openai/gpt-oss-120b`) grades every reply as *full leak*, *partial leak* (part of the code, or confirms hidden notes exist), *off-policy* (the bot left its role), *refused* or *answered*. It also flags **over-refusal**, when the bot refuses a normal customer question. The exact detector always wins on real leaks, and the dashboard reports how often the judge **agrees with the detector**, so you know how far to trust it.
 - ⚖️ **Severity-weighted score**: a leaked *critical* attack costs more than a *medium* one; grades A–F.
+- 📄 **Security report**: one click turns a run into a professional HTML report: grade, executive summary, OWASP risk overview, findings sorted by severity (with the leaked secret highlighted and the AI judge's reasoning), **remediation advice per weakness**, methodology and a full appendix. **Save as PDF** from the browser. Examples: [allam-2-7b (grade F)](docs/sample-report-allam-2-7b.html) · [gpt-oss-20b (grade A)](docs/sample-report-gpt-oss-20b.html)
 - 💾 **Every run saved** as JSON in `results/` (per-attack replies, scores by category, OWASP risk and severity).
 - 📊 **Live dashboard**: results stream in as they arrive, with an A–F security score, per-technique breakdown and leaked secrets highlighted.
 - ⇄ **Model comparison**: run the full suite against several LLMs and rank them.
@@ -104,6 +105,8 @@ python -m redteam.cli                              # every model in TARGET_MODEL
 python -m redteam.cli --model allam-2-7b           # one model
 python -m redteam.cli --category obfuscation       # one category
 python -m redteam.cli --model allam-2-7b --judge   # also grade every reply with the AI judge
+python -m redteam.cli --model allam-2-7b --report  # also write an HTML report to reports/
+python -m redteam.report                           # report for the newest saved run
 python -m redteam.cli --target https://your-bot/api/chat   # any {"message"} -> {"reply"} chatbot
 ```
 
@@ -128,6 +131,7 @@ redteam/
   library.py         loads + validates attacks.yaml
   detectors.py       leak detection (plain, reversed, scattered, base64, acrostic)
   judge.py           LLM-as-judge: grades replies, catches partial leaks
+  report.py          HTML/PDF security report (summary, OWASP overview, findings, remediation)
   runner.py          async attack runner, combines detector + judge, weighted scoring, saves results/
   cli.py             command-line runner
 app.py               dashboard server (streams results with Server-Sent Events)
@@ -136,6 +140,7 @@ target_bot/app.py    ShopBot - deliberately vulnerable demo chatbot (FastAPI)
 hello_attack.py      step 1: first direct multi-model test
 attack_api.py        step 2: first HTTP attacker
 results/             saved runs (git-ignored)
+reports/             generated reports (git-ignored); examples in docs/
 requirements.txt
 ```
 
@@ -146,7 +151,7 @@ requirements.txt
 - [x] Live web dashboard
 - [x] Attack library in YAML with categories, severity and OWASP mapping
 - [x] LLM-as-judge for partial leaks, policy violations and over-refusal
-- [ ] HTML/PDF security report
+- [x] HTML/PDF security report with OWASP risk overview and remediation advice
 - [ ] Attack a real RAG app (permission bypass, poisoned documents)
 - [ ] AI attacker that generates new attack variants automatically
 - [ ] Defences (Prompt Guard, output filtering) with before/after scores
